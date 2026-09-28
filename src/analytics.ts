@@ -15,73 +15,6 @@ import { getDatabaseContext } from "./database";
 type Row = Record<string, unknown>;
 type Sql = { text: string; params: DuckDBValue[] };
 
-function inClause(
-  column: string,
-  values: string[],
-  clauses: string[],
-  params: DuckDBValue[],
-): void {
-  if (!values.length) return;
-
-  clauses.push(`${column} IN (${values.map(() => "?").join(", ")})`);
-  params.push(...values);
-}
-
-function scopeWhere(
-  plan: QueryPlan,
-  options: { includeBlocked?: boolean; includeDate?: boolean } = {},
-): Sql {
-  const clauses: string[] = [];
-  const params: DuckDBValue[] = [];
-
-  if (!options.includeBlocked) {
-    clauses.push("analytics_blocked = FALSE");
-  }
-
-  inClause("city", plan.filters.cities, clauses, params);
-  inClause("neighborhood", plan.filters.neighborhoods, clauses, params);
-  inClause("property_type", plan.filters.propertyTypes, clauses, params);
-
-  if (plan.filters.roomsMin !== null) {
-    clauses.push("rooms IS NOT NULL AND rooms >= ?");
-    params.push(plan.filters.roomsMin);
-  }
-
-  if (plan.filters.roomsMax !== null) {
-    clauses.push("rooms IS NOT NULL AND rooms <= ?");
-    params.push(plan.filters.roomsMax);
-  }
-
-  if (options.includeDate !== false) {
-    if (plan.filters.dateFrom !== null) {
-      clauses.push("deal_date_start IS NOT NULL AND deal_date_start >= ?");
-      params.push(plan.filters.dateFrom);
-    }
-
-    if (plan.filters.dateTo !== null) {
-      clauses.push("deal_date_end IS NOT NULL AND deal_date_end <= ?");
-      params.push(plan.filters.dateTo);
-    }
-  }
-
-  return {
-    text: clauses.length ? clauses.join(" AND ") : "TRUE",
-    params,
-  };
-}
-
-function metricEligibility(metric: Metric | null): string[] {
-  if (metric === null || metric === "count") return [];
-
-  const rules = ["price_nis IS NOT NULL", "suspicious_price = FALSE"];
-
-  if (metric === "median_price_sqm" || metric === "average_price_sqm") {
-    rules.push("calculated_price_per_sqm IS NOT NULL");
-  }
-
-  return rules;
-}
-
 const METRIC_SQL: Record<Metric, string> = {
   count: "COUNT(*)",
   median_price: "MEDIAN(price_nis)",
@@ -90,50 +23,105 @@ const METRIC_SQL: Record<Metric, string> = {
   average_price_sqm: "AVG(calculated_price_per_sqm)",
 };
 
-const GROUP_SQL: Record<GroupBy, { select: string; notNull: string }> = {
-  city: { select: "city", notNull: "city <> ''" },
+const GROUP_SQL: Record<GroupBy, { value: string; present: string }> = {
+  city: { value: "city", present: "city <> ''" },
   neighborhood: {
-    select: "neighborhood",
-    notNull: "neighborhood IS NOT NULL",
+    value: "neighborhood",
+    present: "neighborhood IS NOT NULL",
   },
   property_type: {
-    select: "property_type",
-    notNull: "property_type <> ''",
+    value: "property_type",
+    present: "property_type <> ''",
   },
   year: {
-    select: "CAST(deal_year AS VARCHAR)",
-    notNull: "deal_year IS NOT NULL",
+    value: "CAST(deal_year AS VARCHAR)",
+    present: "deal_year IS NOT NULL",
   },
 };
 
-function eligibleWhere(plan: QueryPlan): Sql {
-  const scope = scopeWhere(plan);
-  const rules = [...metricEligibility(plan.metric)];
+const asNumber = (value: unknown): number | null => {
+  if (value === null || value === undefined) return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+};
 
-  if (plan.intent === "compare" && plan.groupBy !== null) {
-    rules.push(GROUP_SQL[plan.groupBy].notNull);
+const asString = (value: unknown): string =>
+  typeof value === "string" ? value : "";
+
+async function query(connection: DuckDBConnection, sql: Sql): Promise<Row[]> {
+  return (await connection.runAndReadAll(sql.text, sql.params))
+    .getRowObjectsJson() as Row[];
+}
+
+function where(
+  plan: QueryPlan,
+  options: {
+    includeBlocked?: boolean;
+    includeDate?: boolean;
+    includeEligibility?: boolean;
+  } = {},
+): Sql {
+  const clauses: string[] = [];
+  const params: DuckDBValue[] = [];
+  const add = (clause: string, ...values: DuckDBValue[]) => {
+    clauses.push(clause);
+    params.push(...values);
+  };
+  const addList = (column: string, values: string[]) => {
+    if (!values.length) return;
+    add(`${column} IN (${values.map(() => "?").join(", ")})`, ...values);
+  };
+
+  if (!options.includeBlocked) add("analytics_blocked = FALSE");
+
+  addList("city", plan.filters.cities);
+  addList("neighborhood", plan.filters.neighborhoods);
+  addList("property_type", plan.filters.propertyTypes);
+
+  if (plan.filters.roomsMin !== null) {
+    add("rooms IS NOT NULL AND rooms >= ?", plan.filters.roomsMin);
+  }
+  if (plan.filters.roomsMax !== null) {
+    add("rooms IS NOT NULL AND rooms <= ?", plan.filters.roomsMax);
+  }
+
+  if (options.includeDate !== false) {
+    if (plan.filters.dateFrom !== null) {
+      add(
+        "deal_date_start IS NOT NULL AND deal_date_start >= ?",
+        plan.filters.dateFrom,
+      );
+    }
+    if (plan.filters.dateTo !== null) {
+      add(
+        "deal_date_end IS NOT NULL AND deal_date_end <= ?",
+        plan.filters.dateTo,
+      );
+    }
+  }
+
+  if (options.includeEligibility !== false) {
+    if (plan.metric !== null && plan.metric !== "count") {
+      add("price_nis IS NOT NULL");
+      add("suspicious_price = FALSE");
+
+      if (
+        plan.metric === "median_price_sqm" ||
+        plan.metric === "average_price_sqm"
+      ) {
+        add("calculated_price_per_sqm IS NOT NULL");
+      }
+    }
+
+    if (plan.intent === "compare" && plan.groupBy) {
+      add(GROUP_SQL[plan.groupBy].present);
+    }
   }
 
   return {
-    text: [scope.text, ...rules].join(" AND "),
-    params: scope.params,
+    text: clauses.length ? clauses.join(" AND ") : "TRUE",
+    params,
   };
-}
-
-async function rows(connection: DuckDBConnection, sql: Sql): Promise<Row[]> {
-  const reader = await connection.runAndReadAll(sql.text, sql.params);
-  return reader.getRowObjectsJson() as Row[];
-}
-
-function numberValue(value: unknown): number | null {
-  if (value === null || value === undefined) return null;
-
-  const parsed = Number(value);
-  return Number.isFinite(parsed) ? parsed : null;
-}
-
-function stringValue(value: unknown): string {
-  return typeof value === "string" ? value : "";
 }
 
 function toEvidence(row: Row): DealEvidence {
@@ -148,179 +136,173 @@ function toEvidence(row: Row): DealEvidence {
   }
 
   return {
-    dealId: stringValue(row.deal_id),
-    city: stringValue(row.city),
+    dealId: asString(row.deal_id),
+    city: asString(row.city),
     neighborhood:
       typeof row.neighborhood === "string" ? row.neighborhood : null,
     street: typeof row.street === "string" ? row.street : null,
-    propertyType: stringValue(row.property_type),
-    rooms: numberValue(row.rooms),
-    sizeSqm: numberValue(row.size_sqm),
+    propertyType: asString(row.property_type),
+    rooms: asNumber(row.rooms),
+    sizeSqm: asNumber(row.size_sqm),
     dealDate:
       typeof row.deal_date_start === "string" ? row.deal_date_start : null,
     dealDateRaw:
       typeof row.deal_date_raw === "string" ? row.deal_date_raw : null,
-    priceNis: numberValue(row.price_nis),
-    pricePerSqm: numberValue(row.calculated_price_per_sqm),
-    source: stringValue(row.source),
+    priceNis: asNumber(row.price_nis),
+    pricePerSqm: asNumber(row.calculated_price_per_sqm),
+    source: asString(row.source),
     issues,
   };
 }
 
-function emptyExclusions(): QueryResult["excluded"] {
-  return {
-    total: 0,
-    blockedRows: 0,
-    suspiciousOrMissingPrice: 0,
-    missingSize: 0,
-    ambiguousMonthDate: 0,
-  };
-}
-
-async function countAmbiguousMonthDates(
+async function ambiguousMonthDates(
   connection: DuckDBConnection,
   plan: QueryPlan,
 ): Promise<number> {
   const { dateFrom, dateTo } = plan.filters;
-  if (dateFrom === null && dateTo === null) return 0;
+  if (!dateFrom && !dateTo) return 0;
 
-  const base = scopeWhere(plan, {
-    includeBlocked: false,
+  const base = where(plan, {
     includeDate: false,
+    includeEligibility: false,
   });
+
   const overlap = [
     base.text,
     "date_precision = 'month'",
     "deal_date_start IS NOT NULL",
     "deal_date_end IS NOT NULL",
   ];
-  const overlapParams: DuckDBValue[] = [...base.params];
-  const containment: string[] = [];
-  const containmentParams: DuckDBValue[] = [];
+  const overlapParams = [...base.params];
+  const contained: string[] = [];
+  const containedParams: DuckDBValue[] = [];
 
-  if (dateFrom !== null) {
+  if (dateFrom) {
     overlap.push("deal_date_end >= ?");
     overlapParams.push(dateFrom);
-    containment.push("deal_date_start >= ?");
-    containmentParams.push(dateFrom);
+    contained.push("deal_date_start >= ?");
+    containedParams.push(dateFrom);
   }
 
-  if (dateTo !== null) {
+  if (dateTo) {
     overlap.push("deal_date_start <= ?");
     overlapParams.push(dateTo);
-    containment.push("deal_date_end <= ?");
-    containmentParams.push(dateTo);
+    contained.push("deal_date_end <= ?");
+    containedParams.push(dateTo);
   }
 
-  const [row] = await rows(connection, {
+  const [row] = await query(connection, {
     text: `
       SELECT COUNT(*) AS count
       FROM deals
       WHERE ${overlap.join(" AND ")}
-        AND NOT (${containment.join(" AND ")})
+        AND NOT (${contained.join(" AND ")})
     `,
-    params: [...overlapParams, ...containmentParams],
+    params: [...overlapParams, ...containedParams],
   });
 
-  return numberValue(row?.count) ?? 0;
+  return asNumber(row?.count) ?? 0;
 }
 
-async function exclusionSummary(
+async function exclusions(
   connection: DuckDBConnection,
   plan: QueryPlan,
 ): Promise<QueryResult["excluded"]> {
-  const scope = scopeWhere(plan, { includeBlocked: true });
-  const isPriceMetric = plan.metric !== null && plan.metric !== "count";
-  const isSqmMetric =
+  const scope = where(plan, {
+    includeBlocked: true,
+    includeEligibility: false,
+  });
+  const priceMetric = plan.metric !== null && plan.metric !== "count";
+  const sqmMetric =
     plan.metric === "median_price_sqm" ||
     plan.metric === "average_price_sqm";
 
-  const [summary] = await rows(connection, {
-    text: `
-      SELECT
-        SUM(CASE WHEN analytics_blocked THEN 1 ELSE 0 END) AS blocked_rows,
-        SUM(CASE
-          WHEN analytics_blocked = FALSE
-            AND ${isPriceMetric ? "(price_nis IS NULL OR suspicious_price = TRUE)" : "FALSE"}
-          THEN 1 ELSE 0 END
-        ) AS bad_price_rows,
-        SUM(CASE
-          WHEN analytics_blocked = FALSE
-            AND ${isSqmMetric ? "price_nis IS NOT NULL AND suspicious_price = FALSE AND calculated_price_per_sqm IS NULL" : "FALSE"}
-          THEN 1 ELSE 0 END
-        ) AS missing_size_rows
-      FROM deals
-      WHERE ${scope.text}
-    `,
-    params: scope.params,
-  });
+  const [rows, ambiguous] = await Promise.all([
+    query(connection, {
+      text: `
+        SELECT
+          SUM(CASE WHEN analytics_blocked THEN 1 ELSE 0 END) AS blocked,
+          SUM(CASE
+            WHEN analytics_blocked = FALSE
+              AND ${priceMetric ? "(price_nis IS NULL OR suspicious_price = TRUE)" : "FALSE"}
+            THEN 1 ELSE 0 END
+          ) AS bad_price,
+          SUM(CASE
+            WHEN analytics_blocked = FALSE
+              AND ${sqmMetric ? "price_nis IS NOT NULL AND suspicious_price = FALSE AND calculated_price_per_sqm IS NULL" : "FALSE"}
+            THEN 1 ELSE 0 END
+          ) AS missing_size
+        FROM deals
+        WHERE ${scope.text}
+      `,
+      params: scope.params,
+    }),
+    ambiguousMonthDates(connection, plan),
+  ]);
 
-  const excluded: QueryResult["excluded"] = {
-    total: 0,
-    blockedRows: numberValue(summary?.blocked_rows) ?? 0,
-    suspiciousOrMissingPrice: numberValue(summary?.bad_price_rows) ?? 0,
-    missingSize: numberValue(summary?.missing_size_rows) ?? 0,
-    ambiguousMonthDate: await countAmbiguousMonthDates(connection, plan),
+  const row = rows[0];
+  const blockedRows = asNumber(row?.blocked) ?? 0;
+  const suspiciousOrMissingPrice = asNumber(row?.bad_price) ?? 0;
+  const missingSize = asNumber(row?.missing_size) ?? 0;
+
+  return {
+    total:
+      blockedRows +
+      suspiciousOrMissingPrice +
+      missingSize +
+      ambiguous,
+    blockedRows,
+    suspiciousOrMissingPrice,
+    missingSize,
+    ambiguousMonthDate: ambiguous,
   };
-
-  excluded.total =
-    excluded.blockedRows +
-    excluded.suspiciousOrMissingPrice +
-    excluded.missingSize +
-    excluded.ambiguousMonthDate;
-
-  return excluded;
 }
 
-async function loadEvidence(
+async function evidence(
   connection: DuckDBConnection,
   plan: QueryPlan,
-  where: Sql,
+  scope: Sql,
   matchedCount: number,
-): Promise<{ evidence: DealEvidence[]; truncated: boolean }> {
+): Promise<{ rows: DealEvidence[]; truncated: boolean }> {
   const limit = plan.intent === "list" ? plan.limit ?? 10 : 8;
-
-  const evidence = (
-    await rows(connection, {
+  const rows = (
+    await query(connection, {
       text: `
         SELECT
           deal_id, city, neighborhood, street, property_type, rooms, size_sqm,
           deal_date_start, deal_date_raw, price_nis, calculated_price_per_sqm,
           source, issues_json
         FROM deals
-        WHERE ${where.text}
+        WHERE ${scope.text}
         ORDER BY deal_date_start DESC NULLS LAST, price_nis DESC NULLS LAST
         LIMIT ?
       `,
-      params: [...where.params, limit],
+      params: [...scope.params, limit],
     })
   ).map(toEvidence);
 
-  return {
-    evidence,
-    truncated: matchedCount > evidence.length,
-  };
+  return { rows, truncated: matchedCount > rows.length };
 }
 
-async function sourceBreakdown(
+async function sources(
   connection: DuckDBConnection,
-  where: Sql,
+  scope: Sql,
 ): Promise<Record<string, number>> {
-  const sourceRows = await rows(connection, {
+  const rows = await query(connection, {
     text: `
       SELECT source, COUNT(*) AS count
       FROM deals
-      WHERE ${where.text}
+      WHERE ${scope.text}
       GROUP BY source
       ORDER BY count DESC, source
     `,
-    params: where.params,
+    params: scope.params,
   });
 
   return Object.fromEntries(
-    sourceRows.map((row) => [
-      stringValue(row.source) || "לא ידוע",
-      numberValue(row.count) ?? 0,
+    rows.map((row) => [
+      asString(row.source) || "לא ידוע",
+      asNumber(row.count) ?? 0,
     ]),
   );
 }
@@ -339,7 +321,13 @@ export async function runQuery(plan: QueryPlan): Promise<QueryResult> {
       evidence: [],
       evidenceTruncated: false,
       sourceBreakdown: {},
-      excluded: emptyExclusions(),
+      excluded: {
+        total: 0,
+        blockedRows: 0,
+        suspiciousOrMissingPrice: 0,
+        missingSize: 0,
+        ambiguousMonthDate: 0,
+      },
     };
   }
 
@@ -350,69 +338,73 @@ export async function runQuery(plan: QueryPlan): Promise<QueryResult> {
   const connection = await instance.connect();
 
   try {
-    const where = eligibleWhere(plan);
-    const [count] = await rows(connection, {
-      text: `SELECT COUNT(*) AS count FROM deals WHERE ${where.text}`,
-      params: where.params,
-    });
-    const matchedCount = numberValue(count?.count) ?? 0;
-
+    const scope = where(plan);
     let value: number | null = null;
-    let sampleSize = matchedCount;
+    let matchedCount = 0;
+    let sampleSize = 0;
     let groups: QueryResult["groups"] = [];
 
     if (plan.intent === "aggregate") {
-      if (plan.metric === null) {
-        throw new Error("Aggregate plan has no metric");
-      }
+      if (!plan.metric) throw new Error("Aggregate plan has no metric");
 
-      const [aggregate] = await rows(connection, {
+      const [row] = await query(connection, {
         text: `
           SELECT
             ${METRIC_SQL[plan.metric]} AS value,
             COUNT(*) AS sample_size
           FROM deals
-          WHERE ${where.text}
+          WHERE ${scope.text}
         `,
-        params: where.params,
+        params: scope.params,
       });
 
-      value = numberValue(aggregate?.value);
-      sampleSize = numberValue(aggregate?.sample_size) ?? 0;
+      value = asNumber(row?.value);
+      sampleSize = asNumber(row?.sample_size) ?? 0;
+      matchedCount = sampleSize;
     }
 
     if (plan.intent === "compare") {
-      if (plan.metric === null || plan.groupBy === null) {
+      if (!plan.metric || !plan.groupBy) {
         throw new Error("Comparison plan is incomplete");
       }
 
       const group = GROUP_SQL[plan.groupBy];
-      const groupRows = await rows(connection, {
+      const rows = await query(connection, {
         text: `
           SELECT
-            ${group.select} AS group_key,
+            ${group.value} AS group_key,
             ${METRIC_SQL[plan.metric]} AS value,
             COUNT(*) AS sample_size
           FROM deals
-          WHERE ${where.text}
+          WHERE ${scope.text}
           GROUP BY 1
           ORDER BY sample_size DESC, group_key
         `,
-        params: where.params,
+        params: scope.params,
       });
 
-      groups = groupRows.map((row) => ({
-        key: stringValue(row.group_key) || "לא ידוע",
-        value: numberValue(row.value),
-        sampleSize: numberValue(row.sample_size) ?? 0,
+      groups = rows.map((row) => ({
+        key: asString(row.group_key) || "לא ידוע",
+        value: asNumber(row.value),
+        sampleSize: asNumber(row.sample_size) ?? 0,
       }));
-      sampleSize = groups.reduce((sum, groupRow) => sum + groupRow.sampleSize, 0);
+      sampleSize = groups.reduce((sum, group) => sum + group.sampleSize, 0);
+      matchedCount = sampleSize;
     }
 
-    const [evidenceResult, sources, excluded] = await Promise.all([
-      loadEvidence(connection, plan, where, matchedCount),
-      sourceBreakdown(connection, where),
-      exclusionSummary(connection, plan),
+    if (plan.intent === "list") {
+      const [row] = await query(connection, {
+        text: `SELECT COUNT(*) AS count FROM deals WHERE ${scope.text}`,
+        params: scope.params,
+      });
+      matchedCount = asNumber(row?.count) ?? 0;
+      sampleSize = matchedCount;
+    }
+
+    const [evidenceResult, sourceBreakdown, excluded] = await Promise.all([
+      evidence(connection, plan, scope, matchedCount),
+      sources(connection, scope),
+      exclusions(connection, plan),
     ]);
 
     return {
@@ -422,9 +414,9 @@ export async function runQuery(plan: QueryPlan): Promise<QueryResult> {
       sampleSize,
       matchedCount,
       groups,
-      evidence: evidenceResult.evidence,
+      evidence: evidenceResult.rows,
       evidenceTruncated: evidenceResult.truncated,
-      sourceBreakdown: sources,
+      sourceBreakdown,
       excluded,
     };
   } finally {

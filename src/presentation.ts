@@ -5,77 +5,56 @@ import type {
   QualitySummary,
 } from "./contracts";
 
-const formatter = new Intl.NumberFormat("he-IL", {
+const format = new Intl.NumberFormat("he-IL", {
   maximumFractionDigits: 0,
-});
+}).format;
 
-function metricLabel(metric: Metric | null): string {
-  switch (metric) {
-    case "count":
-      return "מספר עסקאות";
-    case "median_price":
-      return "חציון מחיר";
-    case "average_price":
-      return "מחיר ממוצע";
-    case "median_price_sqm":
-      return "חציון מחיר למ״ר";
-    case "average_price_sqm":
-      return "מחיר ממוצע למ״ר";
-    default:
-      return "תוצאה";
-  }
-}
+const METRIC_LABEL: Record<Metric, string> = {
+  count: "מספר עסקאות",
+  median_price: "חציון מחיר",
+  average_price: "מחיר ממוצע",
+  median_price_sqm: "חציון מחיר למ״ר",
+  average_price_sqm: "מחיר ממוצע למ״ר",
+};
 
-function groupLabel(groupBy: QueryPlan["groupBy"]): string {
-  switch (groupBy) {
-    case "city":
-      return "עיר";
-    case "neighborhood":
-      return "שכונה";
-    case "property_type":
-      return "סוג נכס";
-    case "year":
-      return "שנת עסקה";
-    default:
-      return "קבוצה";
-  }
-}
+const GROUP_LABEL: Record<NonNullable<QueryPlan["groupBy"]>, string> = {
+  city: "עיר",
+  neighborhood: "שכונה",
+  property_type: "סוג נכס",
+  year: "שנת עסקה",
+};
 
 export function appliedFilters(plan: QueryPlan): string[] {
-  const output: string[] = [];
-  const filters = plan.filters;
+  const f = plan.filters;
+  const filters: string[] = [];
 
-  if (filters.cities.length) {
-    output.push(`עיר: ${filters.cities.join(", ")}`);
+  if (f.cities.length) filters.push(`עיר: ${f.cities.join(", ")}`);
+  if (f.neighborhoods.length) {
+    filters.push(`שכונה: ${f.neighborhoods.join(", ")}`);
+  }
+  if (f.propertyTypes.length) {
+    filters.push(`סוג נכס: ${f.propertyTypes.join(", ")}`);
   }
 
-  if (filters.neighborhoods.length) {
-    output.push(`שכונה: ${filters.neighborhoods.join(", ")}`);
-  }
-
-  if (filters.propertyTypes.length) {
-    output.push(`סוג נכס: ${filters.propertyTypes.join(", ")}`);
-  }
-
-  if (filters.roomsMin !== null && filters.roomsMax !== null) {
-    output.push(
-      filters.roomsMin === filters.roomsMax
-        ? `${filters.roomsMin} חדרים`
-        : `${filters.roomsMin}–${filters.roomsMax} חדרים`,
+  if (f.roomsMin !== null && f.roomsMax !== null) {
+    filters.push(
+      f.roomsMin === f.roomsMax
+        ? `${f.roomsMin} חדרים`
+        : `${f.roomsMin}–${f.roomsMax} חדרים`,
     );
-  } else if (filters.roomsMin !== null) {
-    output.push(`לפחות ${filters.roomsMin} חדרים`);
-  } else if (filters.roomsMax !== null) {
-    output.push(`עד ${filters.roomsMax} חדרים`);
+  } else if (f.roomsMin !== null) {
+    filters.push(`לפחות ${f.roomsMin} חדרים`);
+  } else if (f.roomsMax !== null) {
+    filters.push(`עד ${f.roomsMax} חדרים`);
   }
 
-  if (filters.dateFrom !== null || filters.dateTo !== null) {
-    output.push(
-      `תאריך עסקה: ${filters.dateFrom ?? "התחלה"} עד ${filters.dateTo ?? "סוף"}`,
+  if (f.dateFrom !== null || f.dateTo !== null) {
+    filters.push(
+      `תאריך עסקה: ${f.dateFrom ?? "התחלה"} עד ${f.dateTo ?? "סוף"}`,
     );
   }
 
-  return output;
+  return filters;
 }
 
 export function warnings(
@@ -83,24 +62,22 @@ export function warnings(
   result: QueryResult,
   quality: QualitySummary,
 ): string[] {
-  const output = [
+  const items = [
     "המספרים מתארים רק את קובץ המדגם שסופק ואינם טענה על כלל השוק.",
   ];
 
   if (result.sampleSize > 0 && result.sampleSize < 5) {
-    output.push(
-      "המדגם קטן מ-5 עסקאות, ולכן כדאי לפרש את התוצאה בזהירות.",
-    );
+    items.push("המדגם קטן מ-5 עסקאות, ולכן כדאי לפרש את התוצאה בזהירות.");
   }
 
   if (result.excluded.total > 0) {
-    output.push(
+    items.push(
       `${result.excluded.total} רשומות בתחום הבקשה הוחרגו בגלל איכות נתונים, סתירה או דיוק תאריך.`,
     );
   }
 
   if (result.excluded.ambiguousMonthDate > 0) {
-    output.push(
+    items.push(
       `${result.excluded.ambiguousMonthDate} רשומות עם תאריך ברמת חודש חפפו חלקית לטווח שביקשת והוחרגו במקום להמציא יום עסקה.`,
     );
   }
@@ -109,38 +86,36 @@ export function warnings(
     plan.metric === "median_price_sqm" ||
     plan.metric === "average_price_sqm"
   ) {
-    output.push(
+    items.push(
       "מחיר למ״ר מחושב מחדש כמחיר ÷ שטח; הערך שסופק בקובץ נשמר רק לבקרת איכות.",
     );
   }
 
   if (
-    plan.filters.dateFrom !== null &&
-    quality.dateMin !== null &&
+    plan.filters.dateFrom &&
+    quality.dateMin &&
     plan.filters.dateFrom < quality.dateMin
   ) {
-    output.push(
+    items.push(
       `טווח הבקשה מתחיל לפני תאריך העסקה המוקדם במדגם (${quality.dateMin}).`,
     );
   }
 
   if (
-    plan.filters.dateTo !== null &&
-    quality.dateMax !== null &&
+    plan.filters.dateTo &&
+    quality.dateMax &&
     plan.filters.dateTo > quality.dateMax
   ) {
-    output.push(
+    items.push(
       `טווח הבקשה מסתיים אחרי תאריך העסקה המאוחר במדגם (${quality.dateMax}).`,
     );
   }
 
   if (result.matchedCount === 0 && plan.intent !== "quality") {
-    output.push(
-      "לא נמצאו עסקאות שעומדות בכל התנאים לאחר בדיקות האיכות.",
-    );
+    items.push("לא נמצאו עסקאות שעומדות בכל התנאים לאחר בדיקות האיכות.");
   }
 
-  return output;
+  return items;
 }
 
 export function presentation(
@@ -157,33 +132,31 @@ export function presentation(
 
   if (plan.intent === "list") {
     return {
-      headline: `${formatter.format(result.matchedCount)} עסקאות תואמות`,
+      headline: `${format(result.matchedCount)} עסקאות תואמות`,
       summary: result.evidenceTruncated
-        ? `מוצגות ${result.evidence.length} העסקאות האחרונות מתוך ${formatter.format(result.matchedCount)}.`
+        ? `מוצגות ${result.evidence.length} העסקאות האחרונות מתוך ${format(result.matchedCount)}.`
         : "כל העסקאות התואמות במדגם מוצגות.",
     };
   }
 
   if (plan.intent === "compare") {
     return {
-      headline: `${metricLabel(plan.metric)} לפי ${groupLabel(plan.groupBy)}`,
-      summary: `ההשוואה מבוססת על ${formatter.format(result.sampleSize)} עסקאות ב-${result.groups.length} קבוצות.`,
+      headline: `${METRIC_LABEL[plan.metric!]} לפי ${GROUP_LABEL[plan.groupBy!]}`,
+      summary: `ההשוואה מבוססת על ${format(result.sampleSize)} עסקאות ב-${result.groups.length} קבוצות.`,
     };
   }
 
   if (result.value === null) {
     return {
       headline: "אין מספיק נתונים לחישוב",
-      summary:
-        "לא נמצא ערך תקף שעומד בכל התנאים ובכללי איכות הנתונים.",
+      summary: "לא נמצא ערך תקף שעומד בכל התנאים ובכללי איכות הנתונים.",
     };
   }
 
   if (plan.metric === "count") {
     return {
-      headline: `${formatter.format(result.value)} עסקאות`,
-      summary:
-        "הספירה מתבצעת ישירות על הרשומות שעומדות בכל המסננים.",
+      headline: `${format(result.value)} עסקאות`,
+      summary: "הספירה מתבצעת ישירות על הרשומות שעומדות בכל המסננים.",
     };
   }
 
@@ -194,7 +167,7 @@ export function presentation(
       : " ₪";
 
   return {
-    headline: `${metricLabel(plan.metric)}: ${formatter.format(result.value)}${suffix}`,
-    summary: `החישוב מבוסס על ${formatter.format(result.sampleSize)} עסקאות תקינות במדגם.`,
+    headline: `${METRIC_LABEL[plan.metric!]}: ${format(result.value)}${suffix}`,
+    summary: `החישוב מבוסס על ${format(result.sampleSize)} עסקאות תקינות במדגם.`,
   };
 }

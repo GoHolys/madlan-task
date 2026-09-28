@@ -1,6 +1,9 @@
+import { readFile } from "node:fs/promises";
+import path from "node:path";
+
 import { describe, expect, it } from "vitest";
 
-import { getDataset } from "../src/data";
+import { __test, getDataset } from "../src/data";
 import { normalizeCity, parseDate, parseNumber } from "../src/normalization";
 
 describe("data normalization", () => {
@@ -31,6 +34,19 @@ describe("data normalization", () => {
     expect(normalizeCity("Tel Aviv Yafo")).toBe("תל אביב-יפו");
     expect(normalizeCity('ב"ש')).toBe("באר שבע");
     expect(normalizeCity("Jerusalem")).toBe("ירושלים");
+  });
+
+  it("keeps the data fingerprint stable across line endings", async () => {
+    const raw = await readFile(
+      path.join(process.cwd(), "madlan_deals_sample.csv"),
+      "utf8",
+    );
+    const lf = raw.replace(/\r\n?/g, "\n");
+    const crlf = lf.replace(/\n/g, "\r\n");
+
+    expect(__test.buildDataset(lf).quality.fingerprint).toBe(
+      __test.buildDataset(crlf).quality.fingerprint,
+    );
   });
 
   it("loads the real sample and produces a canonical quality summary", async () => {

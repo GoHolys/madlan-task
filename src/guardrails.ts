@@ -1,49 +1,44 @@
 import type { QueryPlan } from "./contracts";
 import { canonicalCategory } from "./normalization";
 
-function explicitCityMentions(question: string, cities: string[]): string[] {
-  const normalizedQuestion = canonicalCategory(question);
+function mentionedCities(question: string, cities: string[]): string[] {
+  const normalized = canonicalCategory(question);
 
-  return cities.filter((city) => {
-    const normalizedCity = canonicalCategory(city);
+  const matches = cities.filter((city) => {
+    const name = canonicalCategory(city);
 
-    if (normalizedCity === "תל אביב יפו") {
-      return (
-        normalizedQuestion.includes("תל אביב") ||
-        normalizedQuestion.includes("tel aviv yafo") ||
-        /ת[״"]א/.test(question)
-      );
+    if (name === "תל אביב יפו") {
+      return normalized.includes("תל אביב") || /ת[״"]א/.test(question);
+    }
+    if (name === "באר שבע") {
+      return normalized.includes("באר שבע") || /ב[״"]ש/.test(question);
+    }
+    if (name === "ירושלים") {
+      return normalized.includes("ירושלים") || normalized.includes("jerusalem");
     }
 
-    if (normalizedCity === "באר שבע") {
-      return (
-        normalizedQuestion.includes("באר שבע") ||
-        /ב[״"]ש/.test(question)
-      );
-    }
+    return normalized.includes(name);
+  });
 
-    if (normalizedCity === "ירושלים") {
-      return (
-        normalizedQuestion.includes("ירושלים") ||
-        normalizedQuestion.includes("jerusalem")
-      );
-    }
-
-    return normalizedQuestion.includes(normalizedCity);
+  // "מודיעין" must not win over the more specific "מודיעין מכבים רעות".
+  return matches.filter((city) => {
+    const name = canonicalCategory(city);
+    return !matches.some((other) => {
+      const otherName = canonicalCategory(other);
+      return otherName.length > name.length && otherName.includes(name);
+    });
   });
 }
 
-function expectedMetric(question: string): QueryPlan["metric"] | null {
-  const perSquareMeter = /למ[״"'׳]?ר|למטר\s+רבוע/.test(question);
+function requestedMetric(question: string): QueryPlan["metric"] | null {
+  const perSqm = /למ[״"'׳]?ר|למטר\s+רבוע/.test(question);
 
   if (question.includes("חציון")) {
-    return perSquareMeter ? "median_price_sqm" : "median_price";
+    return perSqm ? "median_price_sqm" : "median_price";
   }
-
   if (question.includes("ממוצע")) {
-    return perSquareMeter ? "average_price_sqm" : "average_price";
+    return perSqm ? "average_price_sqm" : "average_price";
   }
-
   if (/כמה\s+עסקאות|מספר\s+עסקאות|כמות\s+עסקאות/.test(question)) {
     return "count";
   }
@@ -51,24 +46,20 @@ function expectedMetric(question: string): QueryPlan["metric"] | null {
   return null;
 }
 
-function explicitRoomRequest(question: string): {
-  value: number;
-  mode: "exact" | "min" | "max";
-} | null {
-  const values = Array.from(
-    question.matchAll(/(\d+(?:[.,]\d+)?)\s*(?:חדרים?|חד[׳'"״]?)/g),
-    (match) => Number(match[1].replace(",", ".")),
-  );
-  const uniqueValues = Array.from(new Set(values)).filter(Number.isFinite);
+function requestedRooms(
+  question: string,
+): { value: number; mode: "exact" | "min" | "max" } | null {
+  const values = [
+    ...question.matchAll(/(\d+(?:[.,]\d+)?)\s*(?:חדרים?|חד[׳'"״]?)/g),
+  ].map((match) => Number(match[1].replace(",", ".")));
 
-  if (uniqueValues.length !== 1) return null;
+  const unique = [...new Set(values.filter(Number.isFinite))];
+  if (unique.length !== 1) return null;
 
-  const value = uniqueValues[0];
-
+  const value = unique[0];
   if (question.includes("לפחות") || question.includes("ומעלה")) {
     return { value, mode: "min" };
   }
-
   if (/עד\s+\d/.test(question) || question.includes("לכל היותר")) {
     return { value, mode: "max" };
   }
@@ -76,20 +67,13 @@ function explicitRoomRequest(question: string): {
   return { value, mode: "exact" };
 }
 
-function explicitYear(question: string): number | null {
-  const years = [
-    ...Array.from(
-      question.matchAll(/בשנת\s+(20\d{2})/g),
-      (match) => Number(match[1]),
-    ),
-    ...Array.from(
-      question.matchAll(/(?:^|\s)ב-\s*(20\d{2})(?=\s|[?.!,]|$)/g),
-      (match) => Number(match[1]),
-    ),
+function requestedYear(question: string): number | null {
+  const matches = [
+    ...question.matchAll(/בשנת\s+(20\d{2})/g),
+    ...question.matchAll(/(?:^|\s)ב-\s*(20\d{2})(?=\s|[?.!,]|$)/g),
   ];
-  const uniqueYears = Array.from(new Set(years));
-
-  return uniqueYears.length === 1 ? uniqueYears[0] : null;
+  const years = [...new Set(matches.map((match) => Number(match[1])))];
+  return years.length === 1 ? years[0] : null;
 }
 
 export function planDriftReason(
@@ -97,40 +81,40 @@ export function planDriftReason(
   plan: QueryPlan,
   cities: string[],
 ): string | null {
-  if (plan.intent === "quality" || plan.intent === "unsupported") {
-    return null;
-  }
+  if (plan.intent === "quality" || plan.intent === "unsupported") return null;
 
   const plannedCities = plan.filters.cities.map(canonicalCategory);
-  for (const city of explicitCityMentions(question, cities)) {
-    if (!plannedCities.includes(canonicalCategory(city))) {
-      return "פירוש ה-AI לא שמר על העיר שביקשת, ולכן לא הרצתי חישוב.";
-    }
+  if (
+    mentionedCities(question, cities).some(
+      (city) => !plannedCities.includes(canonicalCategory(city)),
+    )
+  ) {
+    return "פירוש ה-AI לא שמר על העיר שביקשת, ולכן לא הרצתי חישוב.";
   }
 
-  const metric = expectedMetric(question);
-  if (metric !== null && plan.metric !== metric) {
+  const metric = requestedMetric(question);
+  if (metric && plan.metric !== metric) {
     return "פירוש ה-AI שינה את המדד שביקשת, ולכן לא הרצתי חישוב.";
   }
 
-  const roomRequest = explicitRoomRequest(question);
-  if (roomRequest) {
+  const rooms = requestedRooms(question);
+  if (rooms) {
     const { roomsMin, roomsMax } = plan.filters;
     const preserved =
-      roomRequest.mode === "exact"
-        ? roomsMin === roomRequest.value && roomsMax === roomRequest.value
-        : roomRequest.mode === "min"
-          ? roomsMin === roomRequest.value
-          : roomsMax === roomRequest.value;
+      rooms.mode === "exact"
+        ? roomsMin === rooms.value && roomsMax === rooms.value
+        : rooms.mode === "min"
+          ? roomsMin === rooms.value
+          : roomsMax === rooms.value;
 
     if (!preserved) {
       return "פירוש ה-AI לא שמר על מספר החדרים שביקשת, ולכן לא הרצתי חישוב.";
     }
   }
 
-  const year = explicitYear(question);
+  const year = requestedYear(question);
   if (
-    year !== null &&
+    year &&
     (plan.filters.dateFrom !== `${year}-01-01` ||
       plan.filters.dateTo !== `${year}-12-31`)
   ) {

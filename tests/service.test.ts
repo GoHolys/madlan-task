@@ -143,6 +143,58 @@ describe("answer service", () => {
     }
   });
 
+  it("prefers the most specific explicit city when city names overlap", async () => {
+    const specificCityPlan: QueryPlan = {
+      ...plan,
+      filters: {
+        ...plan.filters,
+        cities: ["מודיעין מכבים רעות"],
+      },
+    };
+
+    const answer = await answerQuestion(
+      {
+        question: "כמה עסקאות היו במודיעין מכבים רעות?",
+        requestId: "req-overlapping-city",
+      },
+      {
+        planner: async () => specificCityPlan,
+        query: async () => result,
+        dataset: getDataset,
+      },
+    );
+
+    expect(answer.status).toBe("ok");
+  });
+
+  it("repairs an exact known city misclassified as a neighborhood", async () => {
+    const misclassifiedPlan: QueryPlan = {
+      ...plan,
+      filters: {
+        ...plan.filters,
+        neighborhoods: ["מודיעין מכבים רעות"],
+      },
+    };
+
+    const answer = await answerQuestion(
+      {
+        question: "כמה עסקאות היו במודיעין מכבים רעות?",
+        requestId: "req-misclassified-city",
+      },
+      {
+        planner: async () => misclassifiedPlan,
+        query: async () => result,
+        dataset: getDataset,
+      },
+    );
+
+    expect(answer.status).toBe("ok");
+    if (answer.status === "ok") {
+      expect(answer.plan.filters.cities).toEqual(["מודיעין מכבים רעות"]);
+      expect(answer.plan.filters.neighborhoods).toEqual([]);
+    }
+  });
+
   it("fails closed when the model changes an explicit metric", async () => {
     const wrongMetricPlan: QueryPlan = {
       ...plan,

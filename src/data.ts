@@ -142,7 +142,10 @@ function buildDataset(rawText: string): Dataset {
     dateMin: usableDates[0] ?? null,
     dateMax: usableDates.at(-1) ?? null,
     issueCounts,
-    fingerprint: createHash("sha256").update(rawText).digest("hex").slice(0, 12),
+    fingerprint: createHash("sha256")
+      .update(rawText.replace(/\r\n?/g, "\n"))
+      .digest("hex")
+      .slice(0, 12),
   };
 
   return {

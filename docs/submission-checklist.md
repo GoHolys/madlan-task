@@ -4,8 +4,8 @@ This is the final checklist for the Madlan challenge. Do not send the submission
 
 ## Required deliverables
 
-- [ ] Public live URL
-- [ ] Public/accessible repository URL
+- [x] Public live URL: https://madlan-task-production.up.railway.app
+- [x] Public/accessible repository URL: https://github.com/GoHolys/madlan-task
 - [x] CSM guide: `docs/csm-guide.md` and `/guide`
 - [x] AI work log: `docs/ai-log.md`
 
@@ -27,7 +27,7 @@ npm run check
 - Vitest
 - production Next.js build
 
-Also inspect `npm audit` before sending. Treat the result as a dependency-risk signal; do not blindly apply a breaking `--force` upgrade immediately before submission.
+Verified on 2026-09-28: `npm ci` succeeds, `npm run check` passes with 41/41 tests, and `npm audit --omit=dev` reports 0 vulnerabilities.
 
 ## 2. Production smoke test
 
@@ -40,9 +40,9 @@ npm run start
 
 Verify:
 
-- [ ] `/` loads
-- [ ] `/guide` loads
-- [ ] `/api/health` returns 2xx
+- [x] `/` loads
+- [x] `/guide` loads
+- [x] `/api/health` returns 2xx
 - [ ] Hebrew text and RTL layout look correct
 - [ ] desktop layout works
 - [ ] mobile/narrow layout works
@@ -105,18 +105,18 @@ With `ENABLE_FAILURE_DEMO=true`:
 
 ## 6. Repository
 
-The local `madlan-task` folder still needs to be made into/pushed as the repository used for submission.
+The submission repository is https://github.com/GoHolys/madlan-task.
 
 Before pushing:
 
-- [ ] no API keys or `.env.local` are tracked
-- [ ] `.next/`, `node_modules/`, coverage and TypeScript build artifacts are not tracked
-- [ ] README renders correctly
-- [ ] CSV required by the app is included
-- [ ] challenge brief is included
-- [ ] CSM guide and AI log are included
+- [x] no API keys or `.env.local` are tracked
+- [x] `.next/`, `node_modules/`, coverage and TypeScript build artifacts are not tracked
+- [x] README delivery links are filled
+- [x] CSV required by the app is included
+- [x] challenge brief is included
+- [x] CSM guide and AI log are included
 
-After pushing, copy the repository URL into `README.md`.
+The repository URL is recorded in `README.md`.
 
 ## 7. Railway deployment
 
@@ -130,24 +130,18 @@ For the service, verify:
 
 After deploy:
 
-- [ ] add the provider API key as a Railway variable
+- [x] provider API key is configured as a Railway variable
 - [ ] set `ENABLE_FAILURE_DEMO=true` for the interview if desired
-- [ ] verify `/api/health` returns 2xx, `ok: true`, and `modelConfigured: true`
+- [x] `/api/health` returns 2xx, `ok: true`, and `modelConfigured: true`
 - [ ] open the public domain in an incognito/private window
 - [ ] run the acceptance questions above
 - [ ] test the failure-demo button
-- [ ] copy the final public URL into `README.md`
+- [x] final public URL is recorded in `README.md`
 
-## 8. Fill the README delivery links
+## 8. README delivery links
 
-Replace both placeholders:
-
-```text
-Public URL: <deployed URL>
-Repository URL: <repository URL>
-```
-
-Do not submit with placeholders.
+- [x] Public URL recorded in `README.md`
+- [x] Repository URL recorded in `README.md`
 
 ## 9. Interview readiness
 

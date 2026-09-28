@@ -113,7 +113,7 @@ A slow, unavailable, or malformed model response produces a clear Hebrew error a
 
 Set `ENABLE_FAILURE_DEMO=true` to expose a reviewer button that exercises this path on demand.
 
-Each response has a Request ID; server logs emit structured JSON with request ID, status, failure code, and duration.
+Each response has a Request ID; server logs emit structured JSON with request ID, status, failure code, and duration. The displayed data fingerprint normalizes line endings before hashing so the same CSV has the same version on Windows and Linux.
 
 ## Testing strategy
 
@@ -173,17 +173,17 @@ For a new Railway service, use the current Railpack deployment path and configur
 5. Add `GROQ_API_KEY` (or set `AI_PROVIDER=openai` and add `OPENAI_API_KEY`).
 6. Optionally set `ENABLE_FAILURE_DEMO=true` for the interview.
 7. Deploy and verify `/api/health` returns 2xx and `modelConfigured: true`.
-8. Add the public URL here before submitting.
+8. Verify the public URL and repository below before submitting.
 
-**Public URL:** _add after deployment_
+**Public URL:** https://madlan-task-production.up.railway.app
 
-**Repository URL:** _add after pushing the submission repository_
+**Repository URL:** https://github.com/GoHolys/madlan-task
 
 ## Challenge coverage
 
 | Brief requirement | Where it is handled |
 | --- | --- |
-| Live/public | Railway deployment path + `/api/health`; URL must be filled before submission |
+| Live/public | Railway deployment at `madlan-task-production.up.railway.app` + `/api/health` |
 | Hebrew, RTL | `app/layout.tsx` sets `lang="he"` and `dir="rtl"`; UI copy is Hebrew |
 | LLM does real work | `src/planner.ts` maps free-form Hebrew into the closed `QueryPlan` |
 | Data-supported answers | deterministic DuckDB analytics + sample size, filters, warnings, exclusions, sources and evidence rows |
