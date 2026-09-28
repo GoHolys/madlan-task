@@ -1,0 +1,8 @@
+.next/
+node_modules/
+.env*
+!.env.example
+coverage/
+*.tsbuildinfo
+.DS_Store
+/nul
